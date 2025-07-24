@@ -1,0 +1,23 @@
+const htmlStart = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+`,
+  htmlCloseHeadOpenBody = "</head>\n<body>",
+  htmlEnd = "</body>\n</html>"
+
+module.exports = options => {
+  if (!options) options = {}
+  const {headStylesheet, defaultPageTitle} = options
+  return (socket, pageContent, pageTitle) => {
+    if (!pageTitle) pageTitle = defaultPageTitle
+    socket.write(htmlStart)
+    if (!!pageTitle) socket.write(`  <title>${pageTitle}</title>\n`)
+    if (!!headStylesheet) socket.write(`  <style>\n${headStylesheet}\n  </style>\n`)
+    socket.write(htmlCloseHeadOpenBody)
+    socket.write(pageContent)
+    socket.end(htmlEnd)
+  }
+}
