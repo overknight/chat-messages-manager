@@ -39,6 +39,19 @@ const { read: readFile, openSync, createReadStream } = require("node:fs"),
           readStream.pipe(socket)
         })
       })
+    }],
+    ["message/delete", (socket, messageTimestamp)=>{
+      messageTimestamp = Number(messageTimestamp)
+      prepareMessageTimestamps(()=>{
+        if (!messageTimestamps.has(messageTimestamp)) {
+          socket.end(responseHeaders.notFoundWithText(`ERROR: message with timestamp ${messageTimestamp} not found`))
+          return
+        }
+        chatMessagesFile.remove(messageTimestamp, ()=>{
+          messageTimestamps.delete(messageTimestamp)
+          socket.end(`${responseHeaders.plainText}message with timestamp ${messageTimestamp} removed`)
+        })
+      })
     }]
   ]),
   apiRegexp = /(?<=\/)[^\/]*/g
@@ -48,6 +61,8 @@ module.exports = [
     if (path.startsWith("api/")) {
       const pathComponents = path.match(apiRegexp)
       // const pathComponents = path.split("/")
+      if (pathComponents.length == 3 && pathComponents[0] == "message" && pathComponents[2] == "delete")
+        return ["message/delete", pathComponents[1]]
       if (pathComponents[0] == "message" && pathComponents.length != 2)
         return null
       if (!apiMethods.has(pathComponents[0]))
