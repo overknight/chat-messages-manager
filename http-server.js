@@ -27,6 +27,7 @@ const { createServer } = require("node:net"),
       border-radius: 5px;
       margin: 20px 0;
       border-left: 4px solid #007bff;
+      overflow-wrap: break-word;
     }
     a {
       color: #007bff;
