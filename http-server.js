@@ -36,7 +36,8 @@ const { createServer } = require("node:net"),
   }),
   responseHeaders = require("./response-headers"),
   chatMessagesFile = require("./chat-messages"),
-  { parseHttpHeaders, dateFormat, htmlEscape } = require("./utils")
+  { parseHttpHeaders, dateFormat, htmlEscape } = require("./utils"),
+  [get_api_method_info, exec_api_method] = require("./rest-api")
 
 process.env.TZ = "Europe/Moscow"
 
@@ -59,17 +60,9 @@ const socketDataHandler = function(data) {
     })
     return
   }
-  if (headers.path == "api/msg-timestamps") {
-    socket.write(responseHeaders.plainText)
-    let output = ""
-    chatMessagesFile.read((_, date)=>{
-      output += date + "\n"
-    }, ()=>{
-      output = output.slice(0, -1)
-      if (!output.length)
-        output = "no messages"
-      socket.end(output)
-    })
+  const apiMethodInfo = get_api_method_info(headers.path)
+  if (apiMethodInfo != null) {
+    exec_api_method(socket, apiMethodInfo)
     return
   }
   socket.end(responseHeaders.notFound)
