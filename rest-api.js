@@ -49,7 +49,7 @@ const { read: readFile, openSync, createReadStream } = require("node:fs"),
         }
         chatMessagesFile.remove(messageTimestamp, ()=>{
           messageTimestamps.delete(messageTimestamp)
-          socket.end(`${responseHeaders.plainText}message with timestamp ${messageTimestamp} removed`)
+          socket.end(responseHeaders.redirect("/"))
         })
       })
     }]
