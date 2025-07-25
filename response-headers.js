@@ -16,5 +16,7 @@ Connection: close\r\n\r\n`,
   notFound: `HTTP/1.1 404 Not Found\r
 Content-Length: 0\r
 Connection: close\r\n\r\n`,
-  notFoundWithText: text => headerTemplate.notFound("text/plain", text)
+  notFoundWithText: text => headerTemplate.notFound("text/plain", text),
+  redirect: location => `HTTP/1.1 301 Moved Permanently\r
+Location: ${location}\r\n\r\n`
 }
