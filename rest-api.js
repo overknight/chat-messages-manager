@@ -3,6 +3,37 @@ const { read: readFile, openSync, createReadStream } = require("node:fs"),
   responseHeaders = require("./response-headers"),
   messageTimestamps = (()=>{
     let timestamps = null
+    const init = ()=>{
+      const createIteratorEntry = value=>{
+        const ent = {
+          value
+        }
+        ent.nextEntry = new Promise(resolveNext=>{
+          Object.assign(ent, {resolveNext})
+        })
+        return ent
+      }
+      return new Promise(resolve=>{
+        let currentEntry = null,
+          prevEntry = null
+        timestamps = new Set()
+        chatMessagesFile.read((_, date)=>{
+          timestamps.add(date)
+          if (!currentEntry) {
+            currentEntry = createIteratorEntry(date)
+            resolve(currentEntry)
+            return
+          }
+          prevEntry = currentEntry
+          currentEntry = createIteratorEntry(date)
+          prevEntry.resolveNext(currentEntry)
+          prevEntry = null
+        }, ()=>{
+          currentEntry.resolveNext({})
+          currentEntry = null
+        })
+      })
+    }
     const iteratorProxy = ()=>{
       if (!timestamps) {
         // эта конструкция нужна для подстраховки
@@ -18,32 +49,12 @@ const { read: readFile, openSync, createReadStream } = require("node:fs"),
         // модуля chat-messages (объект chatMessagesFile) метод REST API
         // работает корректно только после того когда хотябы один
         // раз был запрос к серверу для отображения главной страницы
-        timestamps = new Set()
-        let isEOF = false
-        const iteratorQueue = new Promise(resolve=>{
-          const iteratorQueue = []
-          chatMessagesFile.read((_, date)=>{
-            timestamps.add(date)
-            iteratorQueue.push(new Promise(resolve=>{
-              resolve(date)
-            }))
-            resolve(iteratorQueue)
-          }, ()=>{isEOF = true})
-        })
-        let idx = 0
-        const waitForNextEntry = iteratorQueue=>{
-          if (!iteratorQueue[idx] && !isEOF)
-            return new Promise(resolve=>{
-              setTimeout(resolve, 0, iteratorQueue)
-            }).then(waitForNextEntry)
-          return iteratorQueue[idx]
-        }
         return {
+          current: init(),
           async next() {
-            const value = await iteratorQueue.then(waitForNextEntry)
-            if (isEOF && idx >= (await iteratorQueue).length)
-              return { done: true }
-            idx++
+            const {value, nextEntry} = await this.current
+            if (!value) return { done: true }
+            this.current = nextEntry
             return { value }
           }
         }
@@ -52,17 +63,20 @@ const { read: readFile, openSync, createReadStream } = require("node:fs"),
     }
     return {
       has: targetTimestamp=> new Promise(resolve=>{
-        const iterator = iteratorProxy(),
-          waitForNextEntry = iteratorStep=>{
-            if (!iteratorStep.done)
-              return iterator.next().then(waitForNextEntry)
-            resolve(timestamps.has(targetTimestamp))
+        if (!timestamps) {
+          let isFound = false
+          const waitForNext = ent=>{
+            if (!ent.value) {
+              resolve(isFound)
+              return
+            }
+            if (ent.value == targetTimestamp) isFound = true
+            return ent.nextEntry.then(waitForNext)
           }
-        if (!iterator.next().then) {
-          resolve(timestamps.has(targetTimestamp))
+          init().then(waitForNext)
           return
         }
-        iterator.next().then(waitForNextEntry)
+        resolve(timestamps.has(targetTimestamp))
       }),
       delete: targetTimestamp=>{
         if (!timestamps) return false
