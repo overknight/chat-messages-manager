@@ -46,9 +46,8 @@ const { createServer } = require("node:net"),
     }`
   }),
   responseHeaders = require("./response-headers"),
-  chatMessagesFile = require("./chat-messages"),
   { parseHttpHeaders, dateFormat, htmlEscape } = require("./utils"),
-  [get_api_method_info, exec_api_method] = require("./rest-api")
+  [get_api_method_info, exec_api_method, messageTimestamps, readMessagesFromFile] = require("./rest-api")
 
 process.env.TZ = "Europe/Moscow"
 
@@ -61,7 +60,7 @@ const socketDataHandler = function(data) {
     let output = "\n  <div class=\"container\">\n    <h1>Chat Messages</h1>\n" +
       "    <p><a href=\"/api-reference\">REST API Methods</a></p>\n",
       messageCounter = 0
-    chatMessagesFile.read((message, date)=>{
+    readMessagesFromFile((message, date)=>{
       output += `    <div class="details">\n      <h3>${dateFormat(date)}</h3>\n      ${htmlEscape(message)}\n    </div>\n`
       messageCounter++
     }, ()=>{
@@ -72,7 +71,7 @@ const socketDataHandler = function(data) {
     return
   }
   if (headers.path == "api-reference") {
-    const timestamps = []
+    let sampleTimestamps
     let output = `\n  <div class=\"container\">\n    <h1>REST API Methods</h1>
     <section>
       <p><strong>Message timestamps list:</strong></p>
@@ -93,15 +92,31 @@ const socketDataHandler = function(data) {
     <h2>Examples</h2>
     <ul>
       <li><a href="/api/msg-timestamps">/api/msg-timestamps</a></li>`
-    chatMessagesFile.read((_, date)=>{
-      timestamps.push(date)
-    }, ()=>{
-      socket.write(responseHeaders.html)
-      for (const timestamp of timestamps.slice(-3))
-        output += `\n      <li><a href="/api/message/${timestamp}">/api/message/${timestamp}</a></li>`
-      output += "\n    </ul>\n    <hr>\n    <p><a href=\"/\">← Back to the Main Page</a></p>\n  <\/div>\n"
-      html_page(socket, output)
-    })
+    const iterator = messageTimestamps[Symbol.asyncIterator](),
+      onFinished = ()=>{
+        for (const timestamp of sampleTimestamps)
+          output += `\n      <li><a href="/api/message/${timestamp}">/api/message/${timestamp}</a></li>`
+        output += "\n    </ul>\n    <hr>\n    <p><a href=\"/\">← Back to the Main Page</a></p>\n  <\/div>\n"
+        socket.write(responseHeaders.html)
+        html_page(socket, output)
+      }
+    if (!messageTimestamps.isReady) {
+      sampleTimestamps = []
+      const readNext = ({value, done})=>{
+        if (done) {
+          sampleTimestamps = sampleTimestamps.slice(-3)
+          onFinished()
+          return
+        }
+        sampleTimestamps.push(value)
+        iterator.next().then(readNext)
+      }
+      iterator.next().then(readNext)
+    }
+    else {
+      sampleTimestamps = [...iterator].slice(-3)
+      onFinished()
+    }
     return
   }
   const apiMethodInfo = get_api_method_info(headers.path)

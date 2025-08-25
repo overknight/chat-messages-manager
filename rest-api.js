@@ -1,89 +1,113 @@
-const { read: readFile, openSync, createReadStream } = require("node:fs"),
+const { read: readFile, openSync, close: closeFile } = require("node:fs"),
   chatMessagesFile = require("./chat-messages"),
   responseHeaders = require("./response-headers"),
-  messageTimestamps = (()=>{
-    let timestamps = null
-    const init = ()=>{
-      const createIteratorEntry = value=>{
-        const ent = {
-          value
-        }
+  readChatMessageAtFileOffset= (fd, position, callback)=>readFile
+  (fd,{position, length:8},(_, __, buffer)=>{
+    const length = buffer.readUInt16LE()
+    position += 8
+    readFile(fd, {position, length}, (err,bytesRead,buffer)=>{
+      if (err) {
+        closeFile(fd)
+        return
+      }
+      callback(buffer.toString("utf8", 0, bytesRead))
+    })
+  }),
+  [messageTimestamps, createMessageIterator] = (()=>{
+    let timestamps = null,
+      readyStatus = false
+    const createMessageIterator = ()=>{
+      const createIteratorEntry = (message, timestamp)=>{
+        const ent = {message, timestamp}
         ent.nextEntry = new Promise(resolveNext=>{
           Object.assign(ent, {resolveNext})
         })
         return ent
       }
       return new Promise(resolve=>{
-        let currentEntry = null,
-          prevEntry = null
+        let currentEntry = null
         timestamps = new Set()
-        chatMessagesFile.read((_, date)=>{
+        chatMessagesFile.read((message, date)=>{
           timestamps.add(date)
           if (!currentEntry) {
-            currentEntry = createIteratorEntry(date)
+            currentEntry = createIteratorEntry(message, date)
             resolve(currentEntry)
             return
           }
-          prevEntry = currentEntry
-          currentEntry = createIteratorEntry(date)
+          const prevEntry = currentEntry
+          currentEntry = createIteratorEntry(message, date)
           prevEntry.resolveNext(currentEntry)
-          prevEntry = null
         }, ()=>{
-          currentEntry.resolveNext({})
+          if (!currentEntry) 
+            resolve({})
+          else
+            currentEntry.resolveNext({})
           currentEntry = null
+          readyStatus = true
         })
       })
-    }
-    const iteratorProxy = ()=>{
-      if (!timestamps) {
-        // эта конструкция нужна для подстраховки
-        // на случай если метод read объекта chatMessagesFile
-        // ни разу не вызывался. метод read нужно выполнить
-        // хотябы один раз, иначе метод getOffsetForMessageTimestamp
-        // не сможет получить позицию для чтения данных из файла
-        // метод read вызвается при открытии главной страницы
-        // но возможны ситуации когда главная страница не открывалась
-        // например вместо запроса перехода на главную страницу
-        // первым будет обращение к методу REST API и в таком случае
-        // метод сработает некорректно, то есть при нынешней структуре
-        // модуля chat-messages (объект chatMessagesFile) метод REST API
-        // работает корректно только после того когда хотябы один
-        // раз был запрос к серверу для отображения главной страницы
-        return {
-          current: init(),
-          async next() {
-            const {value, nextEntry} = await this.current
-            if (!value) return { done: true }
-            this.current = nextEntry
-            return { value }
+    },
+      iteratorProxy = ()=>{
+        if (!readyStatus) {
+          // эта конструкция нужна для подстраховки
+          // на случай если метод read объекта chatMessagesFile
+          // ни разу не вызывался. метод read нужно выполнить
+          // хотябы один раз, иначе метод getOffsetForMessageTimestamp
+          // не сможет получить позицию для чтения данных из файла
+          // метод read вызвается при открытии главной страницы
+          // но возможны ситуации когда главная страница не открывалась
+          // например вместо запроса перехода на главную страницу
+          // первым будет обращение к методу REST API и в таком случае
+          // метод сработает некорректно, то есть при нынешней структуре
+          // модуля chat-messages (объект chatMessagesFile) метод REST API
+          // работает корректно только после того когда хотябы один
+          // раз был запрос к серверу для отображения главной страницы
+          return {
+            current: createMessageIterator(),
+            async next() {
+              const {timestamp: value, nextEntry} = await this.current
+              if (!nextEntry) return { done: true }
+              this.current = nextEntry
+              return { value }
+            }
           }
         }
+        return timestamps[Symbol.iterator]()
       }
-      return timestamps[Symbol.iterator]()
-    }
-    return {
-      has: targetTimestamp=> new Promise(resolve=>{
-        if (!timestamps) {
-          let isFound = false
-          const waitForNext = ent=>{
-            if (!ent.value) {
-              resolve(isFound)
+    return [
+      Object.create(null, {
+        isReady: {
+          get: ()=>readyStatus
+        },
+        has: {
+          value: targetTimestamp=> new Promise(resolve=>{
+            if (!readyStatus) {
+              let isFound = false
+              const waitForNext = ent=>{
+                if (!ent.nextEntry) {
+                  resolve(isFound)
+                  return
+                }
+                if (ent.timestamp == targetTimestamp) isFound = true
+                return ent.nextEntry.then(waitForNext)
+              }
+              createMessageIterator().then(waitForNext)
               return
             }
-            if (ent.value == targetTimestamp) isFound = true
-            return ent.nextEntry.then(waitForNext)
+            resolve(timestamps.has(targetTimestamp))
+          })
+        },
+        delete: {
+          value: targetTimestamp=>{
+            if (!timestamps) return false
+            return timestamps.delete(targetTimestamp)
           }
-          init().then(waitForNext)
-          return
+        },
+        [Symbol.asyncIterator]: {
+          value: iteratorProxy
         }
-        resolve(timestamps.has(targetTimestamp))
-      }),
-      delete: targetTimestamp=>{
-        if (!timestamps) return false
-        return timestamps.delete(targetTimestamp)
-      },
-      [Symbol.asyncIterator]: iteratorProxy
-    }
+      }), createMessageIterator
+    ]
   })(),
   apiMethods = new Map([
     ["msg-timestamps", async socket=>{
@@ -102,14 +126,15 @@ const { read: readFile, openSync, createReadStream } = require("node:fs"),
         return
       }
       const position = chatMessagesFile.getOffsetForMessageTimestamp(targetMessage),
-        fd = openSync("msg-storage")
-      readFile(fd,{position, length:8},(_, __, buffer)=>{
-        const length = buffer.readUInt16LE(),
-          start = position + 8,
-          end = start + length - 1,
-          readStream = createReadStream(null, {fd, start, end})
+        fd = openSync("msg-storage", "r+")
+      readChatMessageAtFileOffset(fd, position, message=>{
+        closeFile(fd)
+        if (!message) {
+          socket.end(responseHeaders.notFoundWithText("failed to read message"))
+          return
+        }
         socket.write(responseHeaders.plainText)
-        readStream.pipe(socket)
+        socket.end(message)
       })
     }],
     ["message/delete", async (socket, messageTimestamp)=>{
@@ -145,5 +170,36 @@ module.exports = [
     const [, ...apiMethodArgs] = apiMethod
     apiMethod = apiMethod[0]
     apiMethods.get(apiMethod)(socket, ...apiMethodArgs)
+  },
+  messageTimestamps,
+  (entryHandler, onFinished)=>{
+    if (!messageTimestamps.isReady) {
+      const readNext = ent=>{
+        const {timestamp, message, nextEntry} = ent
+        if (!nextEntry) {
+          onFinished()
+          return
+        }
+        entryHandler(message, timestamp)
+        nextEntry.then(readNext)
+      }
+      createMessageIterator().then(readNext)
+      return
+    }
+    const queue = [],
+      fd = openSync("msg-storage", "r+")
+    for (const timestamp of messageTimestamps[Symbol.asyncIterator]()) {
+      const position = chatMessagesFile.getOffsetForMessageTimestamp(timestamp)
+      queue.push(new Promise(resolve=>{
+        readChatMessageAtFileOffset(fd, position, message=>{
+          entryHandler(message, timestamp)
+          resolve()
+        })
+      }))
+    }
+    Promise.all(queue).then(()=>{
+      closeFile(fd)
+      onFinished()
+    })
   }
 ]
