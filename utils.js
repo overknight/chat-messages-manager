@@ -9,25 +9,12 @@ const htmlEscape = (()=>{
   return htmlString => htmlString.replace(regexp, replacer)
 })()
 
-const toCamelCase = (()=>{
-  const regexp = /-(.)/g,
-    replacer = (_,l)=>l.toUpperCase()
-  return str=>str.toLowerCase().replace(regexp, replacer)
-})()
-
 module.exports = {
   htmlEscape,
-  parseHttpHeaders: (requestLine, ...headerLines)=>{
-    let result = {};
-    [,result.path] = requestLine.split(" ")
-    if (result.path)
-      result.path = result.path.replace(/^\//, "")
-    if (!result.path) delete result.path
-    for (const line of headerLines) {
-      const [k,v] = line.split(": ")
-      result[toCamelCase(k)] = v
-    }
-    return Object.freeze(result)
+  parseRequestInfo: req => {
+    if (!req.url) return []
+    const info = req.url.match(regexp_extractQuery) || []
+    return [info[1], new URLSearchParams(info[2])]
   },
   dateFormat: timestamp => {
     const date = new Date(timestamp)

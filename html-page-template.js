@@ -11,13 +11,13 @@ const htmlStart = `<!DOCTYPE html>
 module.exports = options => {
   if (!options) options = {}
   const {headStylesheet, defaultPageTitle} = options
-  return (socket, pageContent, pageTitle) => {
+  return (res, pageContent, pageTitle) => {
     if (!pageTitle) pageTitle = defaultPageTitle
-    socket.write(htmlStart)
-    if (!!pageTitle) socket.write(`  <title>${pageTitle}</title>\n`)
-    if (!!headStylesheet) socket.write(`  <style>\n${headStylesheet}\n  </style>\n`)
-    socket.write(htmlCloseHeadOpenBody)
-    socket.write(pageContent)
-    socket.end(htmlEnd)
+    res.write(htmlStart)
+    if (!!pageTitle) res.write(`  <title>${pageTitle}</title>\n`)
+    if (!!headStylesheet) res.write(`  <style>\n${headStylesheet}\n  </style>\n`)
+    res.write(htmlCloseHeadOpenBody)
+    res.write(pageContent)
+    res.end(htmlEnd)
   }
 }

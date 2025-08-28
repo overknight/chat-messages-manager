@@ -1,4 +1,4 @@
-const { createServer } = require("node:net"),
+const {createServer} = require("node:http"),
   html_page = require("./html-page-template")({
     defaultPageTitle: "Simple HTTP Server",
     headStylesheet: `    body {
@@ -45,32 +45,40 @@ const { createServer } = require("node:net"),
       color: #d35400;
     }`
   }),
-  responseHeaders = require("./response-headers"),
-  { parseHttpHeaders, dateFormat, htmlEscape } = require("./utils"),
+  { parseRequestInfo, dateFormat, htmlEscape } = require("./utils"),
   [get_api_method_info, exec_api_method, messageTimestamps, readMessagesFromFile] = require("./rest-api")
 
-process.env.TZ = "Europe/Moscow"
-
-const socketDataHandler = function(data) {
-  const socket = this
-  const headers = parseHttpHeaders(...data.toString().split("\r\n\r\n")[0].split("\r\n"))
-  // console.log(!headers.path ? "requested main page" : `requested resource: ${headers.path}`)
-  if (!headers.path) {
-    socket.write(responseHeaders.html)
+const server = createServer((req, res) => {
+  const [path, query] = parseRequestInfo(req)
+  console.log(`requested resource: ${path}`)
+  res.setHeader("Content-Type", "text/html; charset=utf-8")
+  if (path === "/") {
+    res.statusCode = 200
     let output = "\n  <div class=\"container\">\n    <h1>Chat Messages</h1>\n" +
       "    <p><a href=\"/api-reference\">REST API Methods</a></p>\n",
       messageCounter = 0
-    readMessagesFromFile((message, date)=>{
+      // chatMessagesFile.read
+      readMessagesFromFile((message, date)=>{
       output += `    <div class="details">\n      <h3>${dateFormat(date)}</h3>\n      ${htmlEscape(message)}\n    </div>\n`
       messageCounter++
     }, ()=>{
       if (!messageCounter) output += "    <div class=\"info\"><p>No messages</p></div>\n"
       output += "  <\/div>\n"
-      html_page(socket, output)
+      html_page(res, output)
     })
     return
   }
-  if (headers.path == "api-reference") {
+  if (path === "/msg-timestamps") {
+    res.statusCode = 200
+    res.setHeader("Content-Type", "text/plain; charset=utf-8")
+    readMessagesFromFile((message, timestamp)=>{
+      res.write(`\n===== ${timestamp} =====\n${message}\n`)
+    }, ()=>{
+      res.end()
+    })
+    return
+  }
+  if (path === "/api-reference") {
     let sampleTimestamps
     let output = `\n  <div class=\"container\">\n    <h1>REST API Methods</h1>
     <section>
@@ -97,8 +105,7 @@ const socketDataHandler = function(data) {
         for (const timestamp of sampleTimestamps)
           output += `\n      <li><a href="/api/message/${timestamp}">/api/message/${timestamp}</a></li>`
         output += "\n    </ul>\n    <hr>\n    <p><a href=\"/\">← Back to the Main Page</a></p>\n  <\/div>\n"
-        socket.write(responseHeaders.html)
-        html_page(socket, output)
+        html_page(res, output)
       }
     if (!messageTimestamps.isReady) {
       sampleTimestamps = []
@@ -119,20 +126,19 @@ const socketDataHandler = function(data) {
     }
     return
   }
-  const apiMethodInfo = get_api_method_info(headers.path)
+  const apiMethodInfo = get_api_method_info(path)
   if (apiMethodInfo != null) {
-    exec_api_method(socket, apiMethodInfo)
+    exec_api_method(res, apiMethodInfo)
     return
   }
-  socket.end(responseHeaders.notFound)
-}
-
-const server = createServer(socket=>{
-  socket.on("data", socketDataHandler)
+  res.statusCode = 404
+  res.removeHeader("Content-Type")
+  res.end()
 })
 
 const PORT = 3000
+const HOST = require("os").hostname()
 
-server.listen(PORT, ()=>{
-  console.log(`Server address: https://${process.env.CODESPACE_NAME}-${PORT}.app.github.dev`)
+server.listen(PORT, HOST, ()=>{
+  console.log(`HTTP Server listening on https://${HOST}--${PORT}--96435430.local-credentialless.webcontainer.io`)
 })

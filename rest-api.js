@@ -1,6 +1,5 @@
 const { read: readFile, openSync, close: closeFile } = require("node:fs"),
   chatMessagesFile = require("./chat-messages"),
-  responseHeaders = require("./response-headers"),
   readChatMessageAtFileOffset= (fd, position, callback)=>readFile
   (fd,{position, length:8},(_, __, buffer)=>{
     const length = buffer.readUInt16LE()
@@ -110,55 +109,64 @@ const { read: readFile, openSync, close: closeFile } = require("node:fs"),
     ]
   })(),
   apiMethods = new Map([
-    ["msg-timestamps", async socket=>{
+    ["msg-timestamps", async res=>{
       let output = ""
       for await (const timestamp of messageTimestamps) {
         output += timestamp + "\n"
       }
       if (!output.length)
         output = "no messages"
-      socket.end(`${responseHeaders.plainText}${output}`)
+      res.setHeader("Content-Type", "text/plain; charset=utf-8")
+      res.end(output)
     }],
-    ["message", async (socket, targetMessage)=>{
+    ["message", async (res, targetMessage)=>{
       targetMessage = Number(targetMessage)
       if (!await messageTimestamps.has(targetMessage)) {
-        socket.end(responseHeaders.notFoundWithText(`ERROR: message with timestamp ${targetMessage} not found`))
+        res.statusCode = 404
+        res.setHeader("Content-Type", "text/plain; charset=utf-8")
+        res.end(`ERROR: message with timestamp ${targetMessage} not found`)
         return
       }
-      const position = chatMessagesFile.getOffsetForMessageTimestamp(targetMessage),
-        fd = openSync("msg-storage", "r+")
+      const fd = openSync("msg-storage", "r+"),
+        position = chatMessagesFile.getOffsetForMessageTimestamp(targetMessage)
       readChatMessageAtFileOffset(fd, position, message=>{
         closeFile(fd)
         if (!message) {
-          socket.end(responseHeaders.notFoundWithText("failed to read message"))
+          res.statusCode = 404
+          res.setHeader("Content-Type", "text/plain; charset=utf-8")
+          res.end("failed to read message")
           return
         }
-        socket.write(responseHeaders.plainText)
-        socket.end(message)
+        res.statusCode = 200
+        res.setHeader("Content-Type", "text/plain; charset=utf-8")
+        res.end(message)
       })
     }],
-    ["message/delete", async (socket, messageTimestamp)=>{
+    ["message/delete", async (res, messageTimestamp)=>{
+      console.log(`removing message with timestamp ${messageTimestamp}`)
       messageTimestamp = Number(messageTimestamp)
       if (!await messageTimestamps.has(messageTimestamp)) {
-        socket.end(responseHeaders.notFoundWithText(`ERROR: message with timestamp ${messageTimestamp} not found`))
+        res.statusCode = 404
+        res.setHeader("Content-Type", "text/plain; charset=utf-8")
+        res.end(`ERROR: message with timestamp ${messageTimestamp} not found`)
         return
       }
       chatMessagesFile.remove(messageTimestamp, ()=>{
         messageTimestamps.delete(messageTimestamp)
-        socket.end(responseHeaders.redirect("/"))
+        res.statusCode = 301
+        res.setHeader("Location", "/")
+        res.end()
       })
     }]
-  ]),
-  apiRegexp = /(?<=\/)[^\/]*/g
+  ])
 
 module.exports = [
   path=>{
-    if (path.startsWith("api/")) {
-      const pathComponents = path.match(apiRegexp)
-      // const pathComponents = path.split("/")
+    if (path.startsWith("/api/")) {
+      const pathComponents = path.replace(/^\/api\//, "").split("/")
       if (pathComponents.length == 3 && pathComponents[0] == "message" && pathComponents[2] == "delete")
         return ["message/delete", pathComponents[1]]
-      if (pathComponents[0] == "message" && pathComponents.length != 2)
+      if (pathComponents[1] == "message" && pathComponents.length != 2)
         return null
       if (!apiMethods.has(pathComponents[0]))
         return null
@@ -166,10 +174,10 @@ module.exports = [
     }
     return null
   },
-  (socket, apiMethod)=>{
+  (res, apiMethod)=>{
     const [, ...apiMethodArgs] = apiMethod
     apiMethod = apiMethod[0]
-    apiMethods.get(apiMethod)(socket, ...apiMethodArgs)
+    apiMethods.get(apiMethod)(res, ...apiMethodArgs)
   },
   messageTimestamps,
   (entryHandler, onFinished)=>{
