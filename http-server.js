@@ -134,5 +134,5 @@ const server = createServer(socket=>{
 const PORT = 3000
 
 server.listen(PORT, ()=>{
-  console.log(`Server address: https://${process.env.CODESPACE_NAME}-${PORT}.app.github.dev`)
+  console.log(`Server address: https://${require("os").hostname()}-${PORT}.csb.app`)
 })
